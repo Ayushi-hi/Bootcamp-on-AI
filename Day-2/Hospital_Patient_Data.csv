@@ -1,0 +1,16 @@
+PatientID,Patient_Name,Age,Gender,Disease,Date,Status,Treatment-Cost
+P001,AYUSH,25,M,Fever,2021-01-01,Recovered,1000
+P002,RAJ,24,M,Cold,2021-01-02,Discharged,2000
+P003,SURAJ,21,M,Cough,2021-01-03,Recovered,1500
+P004,RAVI,22,M,Fever,2021-01-04,Recovered,1200
+P005,KUMAR,24,M,Cold,2021-01-05,Critical,2500
+P006,RAY,23,M,Cough,2021-01-06,Critical,2200
+P007,PAGLU,22,M,Fever,2021-01-07,Recovered,1800
+P008,RAJESH,21,M,Cold,2021-01-08,Recovered,1600
+P009,RAMESH,24,M,Cough,2021-01-09,Discharged,2100
+P010,SURESH,25,M,Fever,2021-01-10,Recovered,1900
+P011,RAJIV,23,M,Cold,2021-01-11,Recovered,1700
+P012,RANJEET,22,M,Cough,2021-01-12,Discharged,2300
+P013,RAHUL,21,M,Fever,2021-01-13,Recovered,1400
+P014,RAVI,24,M,Cold,2021-01-14,Recovered,2400
+P015,RAJESH,25,M,Cough,2021-01-15,Critical,2600
