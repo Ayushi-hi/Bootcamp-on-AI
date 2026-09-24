@@ -5,8 +5,7 @@ import math
 
 
 # =========================================================
-# CLASSFOCUS
-# Simple Classroom Attention Detection
+# CONFIGURATION
 # =========================================================
 
 STUDENT_REPORT = "classfocus_report.csv"
@@ -15,7 +14,11 @@ CLASS_REPORT = "classfocus_class_report.csv"
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 
-MOVEMENT_THRESHOLD = 35
+# Movement thresholds
+ATTENTIVE_MOVEMENT = 8
+LESS_ATTENTIVE_MOVEMENT = 35
+
+# How long movement must continue before distraction
 DISTRACTION_DELAY = 2.0
 
 
@@ -34,39 +37,43 @@ face_detector = cv2.CascadeClassifier(
 # =========================================================
 
 students = {}
-next_student_id = 1
 
 
 # =========================================================
-# CREATE STUDENT
+# CREATE NEW STUDENT
 # =========================================================
 
-def create_student(x, y):
+def create_student(student_id, x, y):
 
-    global next_student_id
+    current_time = time.time()
 
-    student_id = next_student_id
-    next_student_id += 1
+    return {
 
-    students[student_id] = {
+        "id": student_id,
+
         "x": x,
         "y": y,
 
-        "first_seen": time.time(),
-        "last_seen": time.time(),
-        "last_update": time.time(),
+        "first_seen": current_time,
+        "last_seen": current_time,
+        "last_update": current_time,
 
-        "total_time": 0.0,
-        "attentive_time": 0.0,
-        "distraction_time": 0.0,
+        # Time statistics
+        "total_time": 0,
 
+        "attentive_time": 0,
+        "less_attentive_time": 0,
+        "distracted_time": 0,
+
+        # Distraction information
         "distraction_start": None,
         "distraction_events": 0,
+        "longest_distraction": 0,
 
-        "longest_distraction": 0.0
+        # Current status
+        "last_status": "ATTENTIVE",
+        "attention_percentage": 100
     }
-
-    return student_id
 
 
 # =========================================================
@@ -75,8 +82,8 @@ def create_student(x, y):
 
 def find_student(x, y):
 
-    best_id = None
-    best_distance = 999999
+    closest_student = None
+    closest_distance = float("inf")
 
     for student_id, student in students.items():
 
@@ -85,14 +92,12 @@ def find_student(x, y):
             (y - student["y"]) ** 2
         )
 
-        if distance < best_distance:
-            best_distance = distance
-            best_id = student_id
+        if distance < 120 and distance < closest_distance:
 
-    if best_distance < 120:
-        return best_id
+            closest_distance = distance
+            closest_student = student_id
 
-    return None
+    return closest_student
 
 
 # =========================================================
@@ -102,12 +107,15 @@ def find_student(x, y):
 def get_attention_level(attention_percentage):
 
     if attention_percentage >= 80:
+
         return "HIGH"
 
     elif attention_percentage >= 50:
+
         return "MEDIUM"
 
     else:
+
         return "LOW"
 
 
@@ -120,115 +128,284 @@ def check_attention(student, x, y):
     old_x = student["x"]
     old_y = student["y"]
 
+    movement_x = x - old_x
+    movement_y = y - old_y
+
     movement = math.sqrt(
-        (x - old_x) ** 2 +
-        (y - old_y) ** 2
+        movement_x ** 2 +
+        movement_y ** 2
     )
 
+    # Update position
     student["x"] = x
     student["y"] = y
 
-    # Camera center
-    center_x = CAMERA_WIDTH // 2
 
-    # Distance from center
-    distance_from_center = abs(
-        x - center_x
-    )
+    # =====================================================
+    # DETERMINE MOVEMENT DIRECTION
+    # =====================================================
 
-    moving_too_much = (
-        movement > MOVEMENT_THRESHOLD
-    )
+    if abs(movement_x) > abs(movement_y):
 
-    looking_away = (
-        distance_from_center > 220
-    )
+        if movement_x > 0:
 
-    if moving_too_much or looking_away:
-        return False
+            direction = "RIGHT"
 
-    return True
+        else:
 
-
-# =========================================================
-# SAVE REPORTS
-# =========================================================
-
-def save_reports(session_duration, attention_history):
-
-    print()
-    print("=" * 60)
-    print("                 CLASSFOCUS REPORT")
-    print("=" * 60)
-
-    # -----------------------------------------------------
-    # CLASS STATISTICS
-    # -----------------------------------------------------
-
-    if attention_history:
-
-        average_class_attention = (
-            sum(attention_history) /
-            len(attention_history)
-        )
-
-        peak_class_attention = max(
-            attention_history
-        )
-
-        lowest_class_attention = min(
-            attention_history
-        )
+            direction = "LEFT"
 
     else:
 
-        average_class_attention = 0
-        peak_class_attention = 0
-        lowest_class_attention = 0
+        if movement_y > 0:
 
-    total_distraction_events = sum(
-        student["distraction_events"]
-        for student in students.values()
+            direction = "DOWN"
+
+        else:
+
+            direction = "UP"
+
+
+    # =====================================================
+    # ATTENTIVE
+    # =====================================================
+
+    if movement <= ATTENTIVE_MOVEMENT:
+
+        status = "ATTENTIVE"
+
+        percentage = 95
+
+        color = (0, 255, 0)
+
+
+    # =====================================================
+    # LESS ATTENTIVE
+    # =====================================================
+
+    elif movement <= LESS_ATTENTIVE_MOVEMENT:
+
+        status = "LESS ATTENTIVE"
+
+        percentage = int(
+            90 -
+            (
+                (movement - ATTENTIVE_MOVEMENT)
+                /
+                (
+                    LESS_ATTENTIVE_MOVEMENT -
+                    ATTENTIVE_MOVEMENT
+                )
+            )
+            * 40
+        )
+
+        color = (0, 255, 255)
+
+
+    # =====================================================
+    # DISTRACTED
+    # =====================================================
+
+    else:
+
+        status = "DISTRACTED"
+
+        percentage = int(
+            max(
+                0,
+                45 -
+                (
+                    movement -
+                    LESS_ATTENTIVE_MOVEMENT
+                )
+            )
+        )
+
+        color = (0, 0, 255)
+
+
+    return (
+        status,
+        percentage,
+        color,
+        movement,
+        direction
     )
 
-    maximum_students = len(students)
 
-    # -----------------------------------------------------
-    # STUDENT REPORT
-    # -----------------------------------------------------
+# =========================================================
+# UPDATE STUDENT STATISTICS
+# =========================================================
+
+def update_student_statistics(
+    student,
+    status,
+    current_time
+):
+
+    elapsed = (
+        current_time -
+        student["last_update"]
+    )
+
+    if elapsed < 0:
+
+        elapsed = 0
+
+
+    # =====================================================
+    # TOTAL TIME
+    # =====================================================
+
+    student["total_time"] += elapsed
+
+
+    # =====================================================
+    # ATTENTIVE TIME
+    # =====================================================
+
+    if status == "ATTENTIVE":
+
+        student["attentive_time"] += elapsed
+
+
+    # =====================================================
+    # LESS ATTENTIVE TIME
+    # =====================================================
+
+    elif status == "LESS ATTENTIVE":
+
+        student["less_attentive_time"] += elapsed
+
+
+    # =====================================================
+    # DISTRACTED TIME
+    # =====================================================
+
+    elif status == "DISTRACTED":
+
+        student["distracted_time"] += elapsed
+
+
+    # =====================================================
+    # DISTRACTION TRACKING
+    # =====================================================
+
+    if status in [
+        "LESS ATTENTIVE",
+        "DISTRACTED"
+    ]:
+
+        if student["distraction_start"] is None:
+
+            student["distraction_start"] = current_time
+
+            student["distraction_events"] += 1
+
+    else:
+
+        if student["distraction_start"] is not None:
+
+            distraction_duration = (
+                current_time -
+                student["distraction_start"]
+            )
+
+            if (
+                distraction_duration >
+                student["longest_distraction"]
+            ):
+
+                student["longest_distraction"] = (
+                    distraction_duration
+                )
+
+            student["distraction_start"] = None
+
+
+    student["last_update"] = current_time
+    student["last_seen"] = current_time
+    student["last_status"] = status
+
+
+# =========================================================
+# CLOSE OPEN DISTRACTIONS BEFORE SAVING
+# =========================================================
+
+def close_open_distractions(current_time):
+
+    for student in students.values():
+
+        if student["distraction_start"] is not None:
+
+            distraction_duration = (
+                current_time -
+                student["distraction_start"]
+            )
+
+            if (
+                distraction_duration >
+                student["longest_distraction"]
+            ):
+
+                student["longest_distraction"] = (
+                    distraction_duration
+                )
+
+            student["distraction_start"] = None
+
+
+# =========================================================
+# SAVE STUDENT REPORT
+# =========================================================
+
+def save_student_report():
 
     with open(
         STUDENT_REPORT,
         "w",
-        newline="",
-        encoding="utf-8"
+        newline=""
     ) as file:
 
         writer = csv.writer(file)
 
         writer.writerow([
+
             "Student",
-            "Total Time (sec)",
-            "Attentive Time (sec)",
-            "Distraction Time (sec)",
-            "Attention (%)",
+
+            "Total Time (seconds)",
+
+            "Attentive Time (seconds)",
+
+            "Less Attentive Time (seconds)",
+
+            "Distracted Time (seconds)",
+
+            "Attention %",
+
             "Attention Level",
+
             "Distraction Events",
-            "Longest Distraction (sec)"
+
+            "Longest Distraction (seconds)"
         ])
+
 
         for student_id, student in students.items():
 
             total_time = student["total_time"]
 
-            attentive_time = student["attentive_time"]
 
-            distraction_time = student["distraction_time"]
+            # =================================================
+            # OVERALL ATTENTION %
+            # =================================================
 
             if total_time > 0:
 
                 attention_percentage = (
-                    attentive_time /
+                    student["attentive_time"]
+                    /
                     total_time
                 ) * 100
 
@@ -236,80 +413,199 @@ def save_reports(session_duration, attention_history):
 
                 attention_percentage = 0
 
-            level = get_attention_level(
+
+            attention_level = get_attention_level(
                 attention_percentage
             )
 
+
             writer.writerow([
+
                 f"Student {student_id}",
-                round(total_time, 2),
-                round(attentive_time, 2),
-                round(distraction_time, 2),
-                round(attention_percentage, 2),
-                level,
+
+                round(
+                    total_time,
+                    2
+                ),
+
+                round(
+                    student["attentive_time"],
+                    2
+                ),
+
+                round(
+                    student["less_attentive_time"],
+                    2
+                ),
+
+                round(
+                    student["distracted_time"],
+                    2
+                ),
+
+                round(
+                    attention_percentage,
+                    2
+                ),
+
+                attention_level,
+
                 student["distraction_events"],
+
                 round(
                     student["longest_distraction"],
                     2
                 )
             ])
 
-    # -----------------------------------------------------
-    # CLASS REPORT
-    # -----------------------------------------------------
+
+# =========================================================
+# SAVE CLASS REPORT
+# =========================================================
+
+def save_class_report(session_duration):
+
+    if len(students) == 0:
+
+        average_attention = 0
+        peak_attention = 0
+        lowest_attention = 0
+        total_distraction_events = 0
+
+    else:
+
+        attention_values = []
+
+        total_distraction_events = 0
+
+
+        for student in students.values():
+
+            total_time = student["total_time"]
+
+            if total_time > 0:
+
+                attention = (
+                    student["attentive_time"]
+                    /
+                    total_time
+                ) * 100
+
+            else:
+
+                attention = 0
+
+
+            attention_values.append(
+                attention
+            )
+
+            total_distraction_events += (
+                student["distraction_events"]
+            )
+
+
+        average_attention = (
+            sum(attention_values)
+            /
+            len(attention_values)
+        )
+
+        peak_attention = max(
+            attention_values
+        )
+
+        lowest_attention = min(
+            attention_values
+        )
+
 
     with open(
         CLASS_REPORT,
         "w",
-        newline="",
-        encoding="utf-8"
+        newline=""
     ) as file:
 
         writer = csv.writer(file)
 
         writer.writerow([
-            "Session Duration (sec)",
+
+            "Session Duration (seconds)",
+
             "Students Detected",
-            "Average Class Attention (%)",
-            "Peak Class Attention (%)",
-            "Lowest Class Attention (%)",
+
+            "Average Class Attention %",
+
+            "Peak Attention %",
+
+            "Lowest Attention %",
+
             "Total Distraction Events"
         ])
 
+
         writer.writerow([
-            round(session_duration, 2),
-            maximum_students,
+
             round(
-                average_class_attention,
+                session_duration,
                 2
             ),
+
+            len(students),
+
             round(
-                peak_class_attention,
+                average_attention,
                 2
             ),
+
             round(
-                lowest_class_attention,
+                peak_attention,
                 2
             ),
+
+            round(
+                lowest_attention,
+                2
+            ),
+
             total_distraction_events
         ])
 
-    # -----------------------------------------------------
-    # PRINT STUDENT REPORT
-    # -----------------------------------------------------
 
-    print()
-    print("STUDENT REPORT")
-    print("-" * 60)
+# =========================================================
+# PRINT REPORT
+# =========================================================
+
+def print_report(session_duration):
+
+    print("\n")
+    print("=" * 70)
+    print("              CLASSFOCUS SESSION REPORT")
+    print("=" * 70)
+
+    print(
+        f"Session Duration: "
+        f"{session_duration:.2f} seconds"
+    )
+
+    print(
+        f"Students Detected: "
+        f"{len(students)}"
+    )
+
+    print("-" * 70)
+
 
     for student_id, student in students.items():
 
         total_time = student["total_time"]
 
+
         if total_time > 0:
 
             attention_percentage = (
-                student["attentive_time"] /
+                student["attentive_time"]
+                /
                 total_time
             ) * 100
 
@@ -317,62 +613,66 @@ def save_reports(session_duration, attention_history):
 
             attention_percentage = 0
 
-        level = get_attention_level(
-            attention_percentage
+
+        print(
+            f"\nStudent {student_id}"
         )
 
         print(
-            f"Student {student_id}: "
-            f"{attention_percentage:.1f}% | "
-            f"{level} | "
-            f"Distractions: "
+            f"  Total Time: "
+            f"{total_time:.2f} seconds"
+        )
+
+        print(
+            f"  ATTENTIVE: "
+            f"{student['attentive_time']:.2f} seconds"
+        )
+
+        print(
+            f"  LESS ATTENTIVE: "
+            f"{student['less_attentive_time']:.2f} seconds"
+        )
+
+        print(
+            f"  DISTRACTED: "
+            f"{student['distracted_time']:.2f} seconds"
+        )
+
+        print(
+            f"  Attention: "
+            f"{attention_percentage:.2f}%"
+        )
+
+        print(
+            f"  Attention Level: "
+            f"{get_attention_level(attention_percentage)}"
+        )
+
+        print(
+            f"  Distraction Events: "
             f"{student['distraction_events']}"
         )
 
-    # -----------------------------------------------------
-    # PRINT CLASS REPORT
-    # -----------------------------------------------------
+        print(
+            f"  Longest Distraction: "
+            f"{student['longest_distraction']:.2f} seconds"
+        )
 
-    print()
-    print("CLASS REPORT")
-    print("-" * 60)
+
+    print("\n")
+    print("=" * 70)
+
+    print("Reports saved:")
 
     print(
-        f"Session Duration: "
-        f"{session_duration:.1f} seconds"
+        f"1. {STUDENT_REPORT}"
     )
 
     print(
-        f"Students Detected: "
-        f"{maximum_students}"
+        f"2. {CLASS_REPORT}"
     )
 
-    print(
-        f"Average Class Attention: "
-        f"{average_class_attention:.1f}%"
-    )
-
-    print(
-        f"Peak Class Attention: "
-        f"{peak_class_attention:.1f}%"
-    )
-
-    print(
-        f"Lowest Class Attention: "
-        f"{lowest_class_attention:.1f}%"
-    )
-
-    print(
-        f"Total Distraction Events: "
-        f"{total_distraction_events}"
-    )
-
-    print()
-    print("Reports created:")
-    print(f"- {STUDENT_REPORT}")
-    print(f"- {CLASS_REPORT}")
-
-    print("=" * 60)
+    print("=" * 70)
 
 
 # =========================================================
@@ -381,22 +681,11 @@ def save_reports(session_duration, attention_history):
 
 def main():
 
-    print()
-    print("=" * 60)
-    print("                    CLASSFOCUS")
-    print("          Classroom Attention Detection")
-    print("=" * 60)
-
-    print()
-    print("Starting camera...")
-    print()
-    print("Q = End session and generate reports")
-    print()
-
     cap = cv2.VideoCapture(
         0,
         cv2.CAP_DSHOW
     )
+
 
     cap.set(
         cv2.CAP_PROP_FRAME_WIDTH,
@@ -408,442 +697,597 @@ def main():
         CAMERA_HEIGHT
     )
 
+
     if not cap.isOpened():
 
-        print("ERROR: Camera could not be opened.")
+        print(
+            "Could not open camera."
+        )
+
         return
+
 
     session_start = time.time()
 
     attention_history = []
 
-    while True:
 
-        ret, frame = cap.read()
+    print(
+        "ClassFocus started."
+    )
 
-        if not ret:
+    print(
+        "Press Q to quit."
+    )
 
-            print("Could not read camera.")
-            break
+    print(
+        "Press Ctrl+C to stop and save the reports."
+    )
 
-        current_time = time.time()
 
-        gray = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2GRAY
-        )
+    try:
 
-        # -------------------------------------------------
-        # DETECT FACES
-        # -------------------------------------------------
+        while True:
 
-        faces = face_detector.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(60, 60)
-        )
+            ret, frame = cap.read()
 
-        current_attention_values = []
 
-        # -------------------------------------------------
-        # PROCESS FACES
-        # -------------------------------------------------
+            if not ret:
 
-        for (x, y, w, h) in faces:
+                print(
+                    "Could not read camera."
+                )
 
-            center_x = x + w // 2
-            center_y = y + h // 2
+                time.sleep(0.1)
 
-            student_id = find_student(
-                center_x,
-                center_y
+                continue
+
+
+            # =================================================
+            # MIRROR CAMERA
+            # =================================================
+
+            frame = cv2.flip(
+                frame,
+                1
             )
 
-            if student_id is None:
 
-                student_id = create_student(
+            gray = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2GRAY
+            )
+
+
+            # =================================================
+            # DETECT FACES
+            # =================================================
+
+            faces = face_detector.detectMultiScale(
+
+                gray,
+
+                scaleFactor=1.1,
+
+                minNeighbors=5,
+
+                minSize=(60, 60)
+            )
+
+
+            current_time = time.time()
+
+            current_attention_values = []
+
+
+            # =================================================
+            # PROCESS EACH STUDENT
+            # =================================================
+
+            for (
+                x,
+                y,
+                w,
+                h
+            ) in faces:
+
+
+                center_x = x + w // 2
+
+                center_y = y + h // 2
+
+
+                student_id = find_student(
+
                     center_x,
+
                     center_y
                 )
 
-            student = students[student_id]
 
-            # Time since last frame
-            delta = (
-                current_time -
-                student["last_update"]
-            )
+                # =============================================
+                # CREATE NEW STUDENT
+                # =============================================
 
-            if delta > 1:
-                delta = 0
+                if student_id is None:
 
-            student["total_time"] += delta
-            student["last_update"] = current_time
-            student["last_seen"] = current_time
-
-            # -------------------------------------------------
-            # ATTENTION
-            # -------------------------------------------------
-
-            attentive = check_attention(
-                student,
-                center_x,
-                center_y
-            )
-
-            if attentive:
-
-                student["attentive_time"] += delta
-
-                # Stop distraction timer
-                student["distraction_start"] = None
-
-            else:
-
-                if student["distraction_start"] is None:
-
-                    student["distraction_start"] = (
-                        current_time
+                    student_id = (
+                        len(students) + 1
                     )
 
-                distraction_duration = (
-                    current_time -
-                    student["distraction_start"]
-                )
+                    students[student_id] = (
+                        create_student(
 
-                # Start counting after 2 seconds
-                if distraction_duration >= DISTRACTION_DELAY:
+                            student_id,
 
-                    student["distraction_time"] += delta
+                            center_x,
 
-                    # Count event once
-                    if (
-                        distraction_duration - delta
-                        < DISTRACTION_DELAY
-                    ):
-
-                        student["distraction_events"] += 1
-
-                if distraction_duration > student[
-                    "longest_distraction"
-                ]:
-
-                    student[
-                        "longest_distraction"
-                    ] = distraction_duration
-
-            # -------------------------------------------------
-            # ATTENTION %
-            # -------------------------------------------------
-
-            if student["total_time"] > 0:
-
-                attention_percentage = (
-                    student["attentive_time"] /
-                    student["total_time"]
-                ) * 100
-
-            else:
-
-                attention_percentage = 0
-
-            attention_percentage = max(
-                0,
-                min(
-                    100,
-                    attention_percentage
-                )
-            )
-
-            current_attention_values.append(
-                attention_percentage
-            )
-
-            # -------------------------------------------------
-            # ATTENTION LEVEL
-            # -------------------------------------------------
-
-            level = get_attention_level(
-                attention_percentage
-            )
-
-            # -------------------------------------------------
-            # STATUS
-            # -------------------------------------------------
-
-            if attentive:
-
-                status = "ATTENTIVE"
-
-            else:
-
-                distraction_duration = (
-                    current_time -
-                    student["distraction_start"]
-                )
-
-                if (
-                    distraction_duration
-                    >= DISTRACTION_DELAY
-                ):
-
-                    status = "DISTRACTED"
-
-                else:
-
-                    status = "CHECKING..."
-
-            # -------------------------------------------------
-            # COLORS
-            # -------------------------------------------------
-
-            if level == "HIGH":
-
-                color = (0, 255, 0)
-
-            elif level == "MEDIUM":
-
-                color = (0, 255, 255)
-
-            else:
-
-                color = (0, 0, 255)
-
-            # -------------------------------------------------
-            # FACE BOX
-            # -------------------------------------------------
-
-            cv2.rectangle(
-                frame,
-                (x, y),
-                (x + w, y + h),
-                color,
-                2
-            )
-
-            # Student
-            cv2.putText(
-                frame,
-                f"Student {student_id}",
-                (x, y - 65),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                color,
-                2
-            )
-
-            # Attention
-            cv2.putText(
-                frame,
-                f"Attention: {attention_percentage:.0f}%",
-                (x, y - 43),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                2
-            )
-
-            # Level
-            cv2.putText(
-                frame,
-                f"Level: {level}",
-                (x, y - 22),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                2
-            )
-
-            # Status
-            cv2.putText(
-                frame,
-                status,
-                (x, y + h + 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                2
-            )
-
-            # -------------------------------------------------
-            # DISTRACTION TIMER
-            # -------------------------------------------------
-
-            if student["distraction_start"] is not None:
-
-                distraction_duration = (
-                    current_time -
-                    student["distraction_start"]
-                )
-
-                if distraction_duration >= 0.5:
-
-                    timer_text = (
-                        f"Distraction: "
-                        f"{distraction_duration:.1f}s"
+                            center_y
+                        )
                     )
+
+
+                student = students[student_id]
+
+
+                # =============================================
+                # CHECK ATTENTION
+                # =============================================
+
+                (
+                    status,
+                    percentage,
+                    color,
+                    movement,
+                    direction
+                ) = check_attention(
+
+                    student,
+
+                    center_x,
+
+                    center_y
+                )
+
+
+                student[
+                    "attention_percentage"
+                ] = percentage
+
+
+                # =============================================
+                # UPDATE STATISTICS
+                # =============================================
+
+                update_student_statistics(
+
+                    student,
+
+                    status,
+
+                    current_time
+                )
+
+
+                current_attention_values.append(
+                    percentage
+                )
+
+
+                attention_history.append(
+                    percentage
+                )
+
+
+                # =============================================
+                # DRAW FACE BOX
+                # =============================================
+
+                cv2.rectangle(
+
+                    frame,
+
+                    (x, y),
+
+                    (x + w, y + h),
+
+                    color,
+
+                    2
+                )
+
+
+                # =============================================
+                # STUDENT LABEL
+                # =============================================
+
+                cv2.putText(
+
+                    frame,
+
+                    f"Student {student_id}",
+
+                    (
+                        x,
+                        y - 45
+                    ),
+
+                    cv2.FONT_HERSHEY_SIMPLEX,
+
+                    0.6,
+
+                    color,
+
+                    2
+                )
+
+
+                # =============================================
+                # STATUS LABEL
+                # =============================================
+
+                cv2.putText(
+
+                    frame,
+
+                    f"{status} - {percentage}%",
+
+                    (
+                        x,
+                        y - 20
+                    ),
+
+                    cv2.FONT_HERSHEY_SIMPLEX,
+
+                    0.55,
+
+                    color,
+
+                    2
+                )
+
+
+                # =============================================
+                # HEAD DIRECTION
+                # =============================================
+
+                if status == "LESS ATTENTIVE":
 
                     cv2.putText(
+
                         frame,
-                        timer_text,
-                        (x, y + h + 42),
+
+                        f"Head: {direction}",
+
+                        (
+                            x,
+                            y + h + 20
+                        ),
+
                         cv2.FONT_HERSHEY_SIMPLEX,
+
                         0.5,
-                        (0, 0, 255),
+
+                        color,
+
                         2
                     )
 
-        # -------------------------------------------------
-        # CLASS ATTENTION
-        # -------------------------------------------------
 
-        if current_attention_values:
+                # =============================================
+                # MOVEMENT VALUE
+                # =============================================
 
-            class_attention = (
-                sum(current_attention_values) /
-                len(current_attention_values)
+                cv2.putText(
+
+                    frame,
+
+                    f"Movement: {movement:.1f}",
+
+                    (
+                        x,
+                        y + h + 42
+                    ),
+
+                    cv2.FONT_HERSHEY_SIMPLEX,
+
+                    0.45,
+
+                    color,
+
+                    1
+                )
+
+
+            # =================================================
+            # CLASS ATTENTION
+            # =================================================
+
+            if len(current_attention_values) > 0:
+
+                class_attention = (
+                    sum(current_attention_values)
+                    /
+                    len(current_attention_values)
+                )
+
+            else:
+
+                class_attention = 0
+
+
+            # =================================================
+            # DASHBOARD
+            # =================================================
+
+            cv2.rectangle(
+
+                frame,
+
+                (10, 10),
+
+                (260, 105),
+
+                (30, 30, 30),
+
+                -1
             )
 
-            attention_history.append(
-                class_attention
+
+            cv2.putText(
+
+                frame,
+
+                f"Students: {len(students)}",
+
+                (20, 35),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.6,
+
+                (255, 255, 255),
+
+                2
             )
 
-        else:
 
-            class_attention = 0
+            cv2.putText(
 
-        # -------------------------------------------------
-        # CLASS LEVEL
-        # -------------------------------------------------
+                frame,
 
-        class_level = get_attention_level(
-            class_attention
-        )
+                f"Class Attention: {class_attention:.1f}%",
 
-        # -------------------------------------------------
-        # SESSION TIMER
-        # -------------------------------------------------
+                (20, 60),
 
-        session_time = (
-            current_time -
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.55,
+
+                (255, 255, 255),
+
+                2
+            )
+
+
+            cv2.putText(
+
+                frame,
+
+                "Press Q to Quit",
+
+                (20, 88),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.45,
+
+                (200, 200, 200),
+
+                1
+            )
+
+
+            # =================================================
+            # LEGEND
+            # =================================================
+
+            cv2.putText(
+
+                frame,
+
+                "GREEN = ATTENTIVE",
+
+                (
+                    10,
+                    CAMERA_HEIGHT - 70
+                ),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.5,
+
+                (0, 255, 0),
+
+                2
+            )
+
+
+            cv2.putText(
+
+                frame,
+
+                "YELLOW = LESS ATTENTIVE",
+
+                (
+                    10,
+                    CAMERA_HEIGHT - 45
+                ),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.5,
+
+                (0, 255, 255),
+
+                2
+            )
+
+
+            cv2.putText(
+
+                frame,
+
+                "RED = DISTRACTED",
+
+                (
+                    10,
+                    CAMERA_HEIGHT - 20
+                ),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.5,
+
+                (0, 0, 255),
+
+                2
+            )
+
+
+            # =================================================
+            # SHOW WINDOW
+            # =================================================
+
+            cv2.imshow(
+
+                "ClassFocus - Classroom Attention",
+
+                frame
+            )
+
+
+            # =================================================
+            # QUIT
+            # =================================================
+
+            key = cv2.waitKey(1) & 0xFF
+
+
+            if key == ord("q"):
+
+                break
+
+
+    except KeyboardInterrupt:
+
+        print("\n")
+        print("ClassFocus stopped with Ctrl+C.")
+        print("Saving reports...")
+
+
+    finally:
+
+        # =====================================================
+        # END SESSION
+        # =====================================================
+
+        session_end = time.time()
+
+        session_duration = (
+            session_end -
             session_start
         )
 
-        minutes = int(session_time // 60)
 
-        seconds = int(session_time % 60)
+        # =====================================================
+        # CLOSE OPEN DISTRACTION PERIODS
+        # =====================================================
 
-        # -------------------------------------------------
-        # DASHBOARD
-        # -------------------------------------------------
-
-        cv2.rectangle(
-            frame,
-            (0, 0),
-            (640, 65),
-            (25, 25, 25),
-            -1
+        close_open_distractions(
+            session_end
         )
 
-        cv2.putText(
-            frame,
-            "CLASSFOCUS",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (255, 255, 255),
-            2
+
+        # =====================================================
+        # ADD FINAL TIME FOR CURRENT STUDENTS
+        # =====================================================
+
+        for student in students.values():
+
+            if student["last_seen"] <= session_end:
+
+                final_elapsed = (
+                    session_end -
+                    student["last_update"]
+                )
+
+                if final_elapsed > 0:
+
+                    if student["last_status"] == "ATTENTIVE":
+
+                        student["attentive_time"] += (
+                            final_elapsed
+                        )
+
+                    elif (
+                        student["last_status"]
+                        ==
+                        "LESS ATTENTIVE"
+                    ):
+
+                        student["less_attentive_time"] += (
+                            final_elapsed
+                        )
+
+                    elif (
+                        student["last_status"]
+                        ==
+                        "DISTRACTED"
+                    ):
+
+                        student["distracted_time"] += (
+                            final_elapsed
+                        )
+
+                    student["total_time"] += (
+                        final_elapsed
+                    )
+
+
+        # =====================================================
+        # RELEASE CAMERA
+        # =====================================================
+
+        cap.release()
+
+        cv2.destroyAllWindows()
+
+
+        # =====================================================
+        # SAVE REPORTS
+        # =====================================================
+
+        save_student_report()
+
+        save_class_report(
+            session_duration
         )
 
-        cv2.putText(
-            frame,
-            f"Students: {len(faces)}",
-            (150, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            2
+
+        # =====================================================
+        # PRINT REPORT
+        # =====================================================
+
+        print_report(
+            session_duration
         )
-
-        cv2.putText(
-            frame,
-            f"Class: {class_attention:.0f}%",
-            (275, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            2
-        )
-
-        cv2.putText(
-            frame,
-            class_level,
-            (390, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 255),
-            2
-        )
-
-        cv2.putText(
-            frame,
-            f"{minutes:02d}:{seconds:02d}",
-            (490, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            2
-        )
-
-        cv2.putText(
-            frame,
-            "Q=Report",
-            (500, 53),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (200, 200, 200),
-            1
-        )
-
-        # -------------------------------------------------
-        # SHOW
-        # -------------------------------------------------
-
-        cv2.imshow(
-            "ClassFocus - Classroom Attention",
-            frame
-        )
-
-        key = cv2.waitKey(1) & 0xFF
-
-        if key == ord("q"):
-
-            break
-
-    # =====================================================
-    # END SESSION
-    # =====================================================
-
-    session_duration = (
-        time.time() -
-        session_start
-    )
-
-    cap.release()
-
-    cv2.destroyAllWindows()
-
-    # Automatically generate reports
-    save_reports(
-        session_duration,
-        attention_history
-    )
 
 
 # =========================================================
-# START
+# START PROGRAM
 # =========================================================
 
 if __name__ == "__main__":
+
     main()
